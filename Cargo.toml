@@ -1,0 +1,15 @@
+[package]
+name = "memctl"
+version = "0.1.0"
+edition = "2021"
+description = "CLI for Claude Code memory hygiene"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+gray_matter = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+strsim = "0.11"
+tempfile = "3"
