@@ -659,6 +659,25 @@ mod bitemporal {
     }
 
     #[test]
+    fn validate_expired_only_warns_exit_0() {
+        let out = memctl()
+            .args(["--path", fixtures("expired_only").to_str().unwrap(), "validate"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "expired valid_until alone should exit 0 (warning, not error)"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("warn:") && stderr.contains("valid_until") && stderr.contains("is in the past"),
+            "should warn about expired valid_until on stderr: {}",
+            stderr
+        );
+    }
+
+    #[test]
     fn validate_accepts_valid_supersession_chain() {
         // The temporal fixture has valid_chain_old -> valid_chain_new which is valid.
         // It also has self_ref and dangling_ref which are invalid.
