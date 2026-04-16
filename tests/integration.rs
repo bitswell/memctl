@@ -604,3 +604,360 @@ mod contract {
         }
     }
 }
+
+// ============================================================
+// Phase 1: Bi-temporal consistency checks
+// ============================================================
+
+mod bitemporal {
+    use super::*;
+
+    // --- validate: temporal consistency ---
+
+    #[test]
+    fn validate_rejects_self_supersession() {
+        let out = memctl()
+            .args(["--path", fixtures("temporal").to_str().unwrap(), "validate"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "should exit 1 when self-ref found");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("superseded_by references itself"),
+            "should report self-reference: {}",
+            stderr
+        );
+    }
+
+    #[test]
+    fn validate_rejects_dangling_superseded_by() {
+        let out = memctl()
+            .args(["--path", fixtures("temporal").to_str().unwrap(), "validate"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "should exit 1 when dangling ref found");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("does not exist"),
+            "should report missing target: {}",
+            stderr
+        );
+    }
+
+    #[test]
+    fn validate_warns_expired_valid_until() {
+        let out = memctl()
+            .args(["--path", fixtures("temporal").to_str().unwrap(), "validate"])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("warn:") && stderr.contains("valid_until") && stderr.contains("is in the past"),
+            "should warn about expired valid_until: {}",
+            stderr
+        );
+    }
+
+    #[test]
+    fn validate_accepts_valid_supersession_chain() {
+        // The temporal fixture has valid_chain_old -> valid_chain_new which is valid.
+        // It also has self_ref and dangling_ref which are invalid.
+        // So validate will fail overall, but the valid chain should NOT produce errors.
+        let out = memctl()
+            .args(["--path", fixtures("temporal").to_str().unwrap(), "validate"])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stderr.contains("valid_chain_old.md: superseded_by"),
+            "valid chain should not produce errors: {}",
+            stderr
+        );
+    }
+
+    // --- supersede: self-reference prevention ---
+
+    #[test]
+    fn supersede_rejects_self() {
+        let tmp = temp_copy("valid");
+        let out = memctl()
+            .args([
+                "--path",
+                tmp.path().to_str().unwrap(),
+                "supersede",
+                "user_alice.md",
+                "user_alice.md",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(2), "self-supersession should exit 2");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("cannot supersede itself"),
+            "should report self-supersession: {}",
+            stderr
+        );
+    }
+
+    #[test]
+    fn supersede_rejects_missing_new_file() {
+        let tmp = temp_copy("valid");
+        let out = memctl()
+            .args([
+                "--path",
+                tmp.path().to_str().unwrap(),
+                "supersede",
+                "user_alice.md",
+                "nonexistent_replacement.md",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(2), "missing new file should exit 2");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("not found"),
+            "should report missing file: {}",
+            stderr
+        );
+    }
+
+    // --- index: explicit filtering tests ---
+
+    #[test]
+    fn index_excludes_superseded_files() {
+        let tmp = temp_copy("valid");
+        memctl()
+            .args(["--path", tmp.path().to_str().unwrap(), "index"])
+            .output()
+            .unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("MEMORY.md")).unwrap();
+        assert!(
+            !content.contains("superseded_old.md"),
+            "superseded file should not appear in index: {}",
+            content
+        );
+        assert!(
+            !content.contains("Old auth setup"),
+            "superseded file name should not appear in index: {}",
+            content
+        );
+    }
+
+    #[test]
+    fn index_excludes_expired_files() {
+        let tmp = temp_copy("valid");
+        memctl()
+            .args(["--path", tmp.path().to_str().unwrap(), "index"])
+            .output()
+            .unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("MEMORY.md")).unwrap();
+        assert!(
+            !content.contains("expired_memory.md"),
+            "expired file should not appear in index: {}",
+            content
+        );
+        assert!(
+            !content.contains("Sprint deadline"),
+            "expired file name should not appear in index: {}",
+            content
+        );
+    }
+
+    #[test]
+    fn index_includes_active_files_only() {
+        let tmp = temp_copy("valid");
+        memctl()
+            .args(["--path", tmp.path().to_str().unwrap(), "index"])
+            .output()
+            .unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("MEMORY.md")).unwrap();
+        // Active files should be present
+        assert!(content.contains("user_alice.md"), "active file should appear");
+        assert!(content.contains("feedback_testing.md"), "active file should appear");
+        assert!(content.contains("reference_docs.md"), "active file should appear");
+        assert!(content.contains("project_launch.md"), "active file should appear");
+
+        // Count lines — should be exactly the 5 active files
+        // (user_alice, feedback_testing, reference_docs, project_launch, extra_fields)
+        let line_count = content.lines().filter(|l| !l.is_empty()).count();
+        assert_eq!(line_count, 5, "should have exactly 5 active entries, got {}", line_count);
+    }
+
+    // --- contradiction lifecycle test ---
+
+    #[test]
+    fn contradiction_lifecycle() {
+        // Full lifecycle: create two contradicting memories, supersede one,
+        // verify both files exist on disk, index only shows the new one,
+        // and the supersession chain is navigable.
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Step 1: Create the "old" memory
+        let old_content = "\
+---
+name: Auth approach
+description: Use session tokens for auth
+type: feedback
+---
+
+Use session-based auth with cookies.
+";
+        fs::write(tmp.path().join("auth_v1.md"), old_content).unwrap();
+
+        // Step 2: Create the contradicting "new" memory
+        let new_content = "\
+---
+name: Auth approach v2
+description: Use JWT tokens for auth (replaces session tokens)
+type: feedback
+---
+
+Use JWT-based auth. Sessions were causing scaling issues.
+";
+        fs::write(tmp.path().join("auth_v2.md"), new_content).unwrap();
+
+        // Step 3: Supersede old with new
+        let out = memctl()
+            .args([
+                "--path",
+                tmp.path().to_str().unwrap(),
+                "supersede",
+                "auth_v1.md",
+                "auth_v2.md",
+            ])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "supersede should succeed: {}", String::from_utf8_lossy(&out.stderr));
+
+        // Step 4: Both files still exist on disk
+        assert!(tmp.path().join("auth_v1.md").exists(), "old file must still exist");
+        assert!(tmp.path().join("auth_v2.md").exists(), "new file must still exist");
+
+        // Step 5: Old file has correct superseded_by link
+        let old_updated = fs::read_to_string(tmp.path().join("auth_v1.md")).unwrap();
+        assert!(
+            old_updated.contains("superseded_by: auth_v2.md"),
+            "old file must point to new: {}",
+            old_updated
+        );
+
+        // Step 6: Index only shows the new memory
+        memctl()
+            .args(["--path", tmp.path().to_str().unwrap(), "index"])
+            .output()
+            .unwrap();
+
+        let index = fs::read_to_string(tmp.path().join("MEMORY.md")).unwrap();
+        assert!(
+            !index.contains("auth_v1.md"),
+            "superseded file must not appear in index: {}",
+            index
+        );
+        assert!(
+            index.contains("auth_v2.md"),
+            "new file must appear in index: {}",
+            index
+        );
+
+        // Step 7: Validate passes (chain is valid)
+        let out = memctl()
+            .args(["--path", tmp.path().to_str().unwrap(), "validate"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "validation should pass for valid chain: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    #[test]
+    fn supersession_chain_navigable() {
+        // v1 -> v2 -> v3, chain should be followable
+        let tmp = tempfile::tempdir().unwrap();
+
+        let v1 = "\
+---
+name: Config v1
+description: First config approach
+type: feedback
+---
+
+Original config.
+";
+        let v2 = "\
+---
+name: Config v2
+description: Second config approach
+type: feedback
+---
+
+Updated config.
+";
+        let v3 = "\
+---
+name: Config v3
+description: Third config approach
+type: feedback
+---
+
+Final config.
+";
+        fs::write(tmp.path().join("config_v1.md"), v1).unwrap();
+        fs::write(tmp.path().join("config_v2.md"), v2).unwrap();
+        fs::write(tmp.path().join("config_v3.md"), v3).unwrap();
+
+        // Supersede v1 -> v2
+        let out = memctl()
+            .args([
+                "--path",
+                tmp.path().to_str().unwrap(),
+                "supersede",
+                "config_v1.md",
+                "config_v2.md",
+            ])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+
+        // Supersede v2 -> v3
+        let out = memctl()
+            .args([
+                "--path",
+                tmp.path().to_str().unwrap(),
+                "supersede",
+                "config_v2.md",
+                "config_v3.md",
+            ])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+
+        // Follow chain: v1 -> v2 -> v3
+        let v1_content = fs::read_to_string(tmp.path().join("config_v1.md")).unwrap();
+        assert!(v1_content.contains("superseded_by: config_v2.md"));
+
+        let v2_content = fs::read_to_string(tmp.path().join("config_v2.md")).unwrap();
+        assert!(v2_content.contains("superseded_by: config_v3.md"));
+
+        let v3_content = fs::read_to_string(tmp.path().join("config_v3.md")).unwrap();
+        assert!(!v3_content.contains("superseded_by"), "v3 should have no superseded_by");
+
+        // Index should only contain v3
+        memctl()
+            .args(["--path", tmp.path().to_str().unwrap(), "index"])
+            .output()
+            .unwrap();
+
+        let index = fs::read_to_string(tmp.path().join("MEMORY.md")).unwrap();
+        assert!(!index.contains("config_v1.md"), "v1 should not be in index");
+        assert!(!index.contains("config_v2.md"), "v2 should not be in index");
+        assert!(index.contains("config_v3.md"), "v3 should be in index");
+
+        // Validate should pass
+        let out = memctl()
+            .args(["--path", tmp.path().to_str().unwrap(), "validate"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "valid chain should pass validation");
+    }
+}
