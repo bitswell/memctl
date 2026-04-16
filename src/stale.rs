@@ -6,7 +6,10 @@ use crate::schema;
 
 /// List memory files with valid_until in the past.
 pub fn run(dir: &Path) -> Result<bool> {
-    let memories = schema::parse_all(dir)?;
+    let (memories, errors) = schema::parse_all(dir)?;
+    for e in &errors {
+        eprintln!("warn: {}", e);
+    }
     let today = Local::now().date_naive();
     let mut found = false;
 

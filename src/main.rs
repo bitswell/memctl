@@ -68,7 +68,7 @@ fn main() {
         Command::Index => index::run(dir).map(|_| 0),
         Command::Supersede { old, new } => supersede::run(dir, &old, &new).map(|_| 0),
         Command::Dedupe => dedupe::run(dir).map(|found| if found { 1 } else { 0 }),
-        Command::Stale => stale::run(dir).map(|found| if found { 0 } else { 0 }),
+        Command::Stale => stale::run(dir).map(|found| if found { 1 } else { 0 }),
         Command::Gc { dry_run } => gc::run(dir, dry_run).map(|_| 0),
         Command::Migrate { dry_run } => migrate::run(dir, dry_run).map(|_| 0),
         Command::Show { query } => show::run(dir, &query).map(|_| 0),

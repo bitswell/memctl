@@ -1,7 +1,17 @@
 use anyhow::{Result, bail};
+use std::io::Write;
 use std::path::Path;
 
 use crate::schema;
+
+/// Atomic write: write to tempfile in same dir, then rename over target.
+fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(content.as_bytes())?;
+    tmp.persist(path)?;
+    Ok(())
+}
 
 /// Mark old_file as superseded by new_file.
 /// Updates the old file's frontmatter with superseded_by pointing to new_file.
@@ -26,7 +36,7 @@ pub fn run(dir: &Path, old_name: &str, new_name: &str) -> Result<()> {
 
     let yaml = serde_yaml::to_string(&fm)?;
     let output = format!("---\n{}---\n\n{}\n", yaml, mf.body.trim());
-    std::fs::write(&old_path, output)?;
+    atomic_write(&old_path, &output)?;
 
     eprintln!("{} superseded by {}", old_name, new_name);
     Ok(())

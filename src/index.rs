@@ -6,7 +6,10 @@ use crate::schema::{self, MemoryFile};
 
 /// Generate MEMORY.md content deterministically.
 pub fn generate(dir: &Path) -> Result<String> {
-    let memories = schema::parse_all(dir)?;
+    let (memories, errors) = schema::parse_all(dir)?;
+    for e in &errors {
+        eprintln!("warn: {}", e);
+    }
 
     // Filter: active memories only (no superseded_by, no expired valid_until)
     let today = Local::now().date_naive();
@@ -36,11 +39,18 @@ pub fn generate(dir: &Path) -> Result<String> {
             .unwrap_or_default()
             .to_string_lossy();
 
-        let mut desc = mf.frontmatter.description.clone();
-        if desc.len() > 100 {
-            desc.truncate(97);
-            desc.push_str("...");
-        }
+        let desc = if mf.frontmatter.description.len() > 100 {
+            // Find a safe char boundary at or before byte 97 to avoid panic on multi-byte UTF-8
+            let safe = mf.frontmatter.description
+                .char_indices()
+                .map(|(i, _)| i)
+                .take_while(|&i| i <= 97)
+                .last()
+                .unwrap_or(0);
+            format!("{}...", &mf.frontmatter.description[..safe])
+        } else {
+            mf.frontmatter.description.clone()
+        };
 
         let tags_suffix = if mf.frontmatter.tags.is_empty() {
             String::new()
@@ -50,7 +60,7 @@ pub fn generate(dir: &Path) -> Result<String> {
         };
 
         lines.push(format!(
-            "- [{}]({}) - {}{}",
+            "- [{}]({}) \u{2014} {}{}",
             mf.frontmatter.name, filename, desc, tags_suffix
         ));
     }

@@ -8,7 +8,10 @@ const THRESHOLD: f64 = 0.85;
 
 /// Find near-duplicate memory files by comparing descriptions.
 pub fn run(dir: &Path) -> Result<bool> {
-    let memories = schema::parse_all(dir)?;
+    let (memories, errors) = schema::parse_all(dir)?;
+    for e in &errors {
+        eprintln!("warn: {}", e);
+    }
     let mut found = false;
 
     for i in 0..memories.len() {

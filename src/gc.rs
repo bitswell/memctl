@@ -7,7 +7,10 @@ use crate::schema;
 
 /// Archive expired and superseded memory files by moving them to an archive/ subdir.
 pub fn run(dir: &Path, dry_run: bool) -> Result<u32> {
-    let memories = schema::parse_all(dir)?;
+    let (memories, errors) = schema::parse_all(dir)?;
+    for e in &errors {
+        eprintln!("warn: {}", e);
+    }
     let today = Local::now().date_naive();
     let archive = dir.join("archive");
 

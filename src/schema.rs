@@ -3,6 +3,7 @@ use chrono::NaiveDate;
 use gray_matter::Matter;
 use gray_matter::engine::YAML;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -38,6 +39,9 @@ pub struct Frontmatter {
     pub valid_until: Option<NaiveDate>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Preserve unknown fields through round-trips (e.g. originSessionId)
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_yaml::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -86,7 +90,9 @@ pub fn discover(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 /// Parse all memory files in a directory.
-pub fn parse_all(dir: &Path) -> Result<Vec<MemoryFile>> {
+/// Returns valid files and error messages for malformed ones.
+/// Callers decide whether to bail or continue with the good files.
+pub fn parse_all(dir: &Path) -> Result<(Vec<MemoryFile>, Vec<String>)> {
     let paths = discover(dir)?;
     let mut memories = Vec::new();
     let mut errors = Vec::new();
@@ -98,9 +104,5 @@ pub fn parse_all(dir: &Path) -> Result<Vec<MemoryFile>> {
         }
     }
 
-    if !errors.is_empty() {
-        bail!("parse errors:\n{}", errors.join("\n"));
-    }
-
-    Ok(memories)
+    Ok((memories, errors))
 }

@@ -1,7 +1,17 @@
 use anyhow::Result;
+use std::io::Write;
 use std::path::Path;
 
 use crate::schema;
+
+/// Atomic write: write to tempfile in same dir, then rename over target.
+fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(content.as_bytes())?;
+    tmp.persist(path)?;
+    Ok(())
+}
 
 /// Backfill missing optional frontmatter fields (superseded_by, valid_until, tags).
 pub fn run(dir: &Path, dry_run: bool) -> Result<u32> {
@@ -27,7 +37,7 @@ pub fn run(dir: &Path, dry_run: bool) -> Result<u32> {
             if dry_run {
                 println!("would migrate: {}", name);
             } else {
-                std::fs::write(path, &output)?;
+                atomic_write(path, &output)?;
                 println!("migrated: {}", name);
             }
             count += 1;

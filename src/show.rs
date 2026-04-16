@@ -5,7 +5,10 @@ use crate::schema;
 
 /// Show a memory file by name (fuzzy match on filename or frontmatter name).
 pub fn run(dir: &Path, query: &str) -> Result<()> {
-    let memories = schema::parse_all(dir)?;
+    let (memories, errors) = schema::parse_all(dir)?;
+    for e in &errors {
+        eprintln!("warn: {}", e);
+    }
 
     // Exact filename match first
     let query_lower = query.to_lowercase();
